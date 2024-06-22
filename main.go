@@ -2,7 +2,6 @@ package main
 
 import (
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	go_ora "github.com/sijms/go-ora/v2"
 	"io"
@@ -30,8 +29,6 @@ func main() {
 		panic(err)
 	}
 
-	fmt.Println("OK")
-
 	rows, err := conn.Query("SELECT FILE_ID, FILE_DATA FROM ORA_BFILE")
 	if err != nil {
 		panic(err)
@@ -46,7 +43,23 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-		fmt.Println("id:", id, "data len:", data.GetFileName())
+
+		err = data.Open()
+		if err != nil {
+			panic(err)
+		}
+		length, err := data.GetLength()
+		if err != nil {
+			panic(err)
+		}
+		fmt.Println("id:", id, "🏏name:", data.GetFileName(),
+			"length:", length, "bytes", length/1024, "kb",
+			length/(1024*1024), "mb", length/(1024*1024*1024), "gb")
+
+		b, err := data.Read()
+		if err != nil {
+			panic(err)
+		}
 
 		fo, err := os.Create(fmt.Sprintf("file-%v.txt", id))
 		if err != nil {
@@ -54,10 +67,6 @@ func main() {
 		}
 		defer fo.Close()
 
-		b, err := json.Marshal(data)
-		if err != nil {
-			panic(err)
-		}
 		n, err := fo.Write(b)
 		if err != nil && err != io.EOF {
 			panic(err)
