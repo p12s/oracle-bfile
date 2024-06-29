@@ -2,20 +2,56 @@ package main
 
 import (
 	"database/sql"
+	"flag"
 	"fmt"
 	go_ora "github.com/sijms/go-ora/v2"
 	"io"
 	"os"
+	"runtime/pprof"
+	"runtime/trace"
+	"time"
 )
 
+const (
+	driver   = "oracle"
+	server   = "localhost"
+	port     = 1521
+	service  = "ORABFILE"
+	user     = "SYSTEM"
+	password = "12345"
+)
+
+var options map[string]string
+
 func main() {
-	driver := "oracle"
-	server := "localhost"
-	port := 1521
-	service := "ORABFILE"
-	user := "SYSTEM"
-	password := "12345"
-	var options map[string]string
+	cpuProfileFile, err := os.Create("cpu.prof")
+	if err != nil {
+		panic(err)
+	}
+	defer cpuProfileFile.Close()
+	if err := pprof.StartCPUProfile(cpuProfileFile); err != nil {
+		panic(err)
+	}
+	defer pprof.StopCPUProfile()
+
+	memProfileFile, err := os.Create("mem.prof")
+	if err != nil {
+		panic(err)
+	}
+	defer memProfileFile.Close()
+	if err := pprof.WriteHeapProfile(memProfileFile); err != nil {
+		panic(err)
+	}
+
+	traceFile, err := os.Create("trace.out")
+	if err != nil {
+		panic(err)
+	}
+	defer traceFile.Close()
+	if err := trace.Start(traceFile); err != nil {
+		panic(err)
+	}
+	defer trace.Stop()
 
 	connStr := go_ora.BuildUrl(server, port, service, user, password, options)
 	conn, err := sql.Open(driver, connStr)
@@ -23,55 +59,128 @@ func main() {
 		panic(err)
 	}
 	defer conn.Close()
-
 	err = conn.Ping()
 	if err != nil {
 		panic(err)
 	}
 
-	rows, err := conn.Query("SELECT FILE_ID, FILE_DATA FROM ORA_BFILE")
+	option := flag.String("option", "", "Launch option")
+	flag.Parse()
+
+	start := time.Now()
+
+	switch *option {
+	case "slow": // 6-8 min, 24 Gb RAM
+		fmt.Println("run slow")
+
+		rows, err := conn.Query("SELECT FILE_ID, FILE_DATA FROM ORA_BFILE")
+		if err != nil {
+			panic(err)
+		}
+		defer rows.Close()
+
+		var id int
+		var data go_ora.BFile
+
+		for rows.Next() {
+			err = rows.Scan(&id, &data)
+			if err != nil {
+				panic(err)
+			}
+
+			err = data.Open()
+			if err != nil {
+				panic(err)
+			}
+			defer data.Close()
+			length, err := data.GetLength()
+			if err != nil {
+				panic(err)
+			}
+			fmt.Println("id:", id, "🏏name:", data.GetFileName(),
+				"length:", length, "bytes,", length/1024, "kb,",
+				length/(1024*1024), "mb,", length/(1024*1024*1024), "gb.")
+
+			b, err := data.Read()
+			if err != nil {
+				panic(err)
+			}
+
+			fo, err := os.Create(fmt.Sprintf("file-%v.txt", id))
+			if err != nil {
+				panic(err)
+			}
+			defer fo.Close()
+
+			n, err := fo.Write(b)
+			if err != nil && err != io.EOF {
+				panic(err)
+			}
+			fmt.Printf("%d bytes copied\n", n)
+		}
+
+	case "faster": // 6-8 sec, 5 Mb RAM
+		fmt.Println("run faster")
+
+		rows, err := conn.Query("SELECT FILE_ID, FILE_DATA FROM ORA_BFILE")
+		if err != nil {
+			panic(err)
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			item := MyStruct{}
+			err = rows.Scan(&item.FileID, &item.FileData)
+			if err != nil {
+				panic(err)
+			}
+
+			err = item.FileData.Open()
+			if err != nil {
+				panic(err)
+			}
+			defer item.FileData.Close()
+			length, err := item.FileData.GetLength()
+			if err != nil {
+				panic(err)
+			}
+			fmt.Println("🦆 id:", item.FileID, "name:", item.FileData.GetFileName(),
+				"length:", length, "bytes,", length/1024, "kb,",
+				length/(1024*1024), "mb,", length/(1024*1024*1024), "gb.")
+
+			fo, err := os.Create(fmt.Sprintf("file-%v.txt", item.FileID))
+			if err != nil {
+				panic(err)
+			}
+			defer fo.Close()
+
+			err = item.CopyDataToFile(fo)
+			if err != nil {
+				panic(err)
+			}
+		}
+	}
+
+	fmt.Println("exec time:", time.Since(start))
+}
+
+type MyStruct struct {
+	FileID   int
+	FileData go_ora.BFile
+}
+
+func (s *MyStruct) CopyDataToFile(dst *os.File) error {
+	src, err := os.Open(fmt.Sprintf("tmp/%s", s.FileData.GetFileName()))
 	if err != nil {
-		panic(err)
+		return err
 	}
+	defer src.Close()
 
-	defer rows.Close()
-	var id int
-	var data go_ora.BFile
-
-	for rows.Next() {
-		err = rows.Scan(&id, &data)
-		if err != nil {
-			panic(err)
-		}
-
-		err = data.Open()
-		if err != nil {
-			panic(err)
-		}
-		length, err := data.GetLength()
-		if err != nil {
-			panic(err)
-		}
-		fmt.Println("id:", id, "🏏name:", data.GetFileName(),
-			"length:", length, "bytes", length/1024, "kb",
-			length/(1024*1024), "mb", length/(1024*1024*1024), "gb")
-
-		b, err := data.Read()
-		if err != nil {
-			panic(err)
-		}
-
-		fo, err := os.Create(fmt.Sprintf("file-%v.txt", id))
-		if err != nil {
-			panic(err)
-		}
-		defer fo.Close()
-
-		n, err := fo.Write(b)
-		if err != nil && err != io.EOF {
-			panic(err)
-		}
-		fmt.Println(n)
+	n, err := io.Copy(dst, src)
+	if err != nil {
+		return err
 	}
+	fmt.Printf("copy data to file: %d bytes copied\n", n)
 
+	return nil
 }

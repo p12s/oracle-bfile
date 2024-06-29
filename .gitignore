@@ -2,3 +2,7 @@
 tmp/
 file-1.txt
 file-2.txt
+cpu.prof
+mem.prof
+trace.out
+*.gif
