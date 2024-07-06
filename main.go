@@ -130,21 +130,21 @@ func main() {
 
 		for rows.Next() {
 			item := MyStruct{}
-			err = rows.Scan(&item.FileID, &item.FileData)
+			err = rows.Scan(&item.FileID, &item)
 			if err != nil {
 				panic(err)
 			}
 
-			err = item.FileData.Open()
+			err = item.Open()
 			if err != nil {
 				panic(err)
 			}
-			defer item.FileData.Close()
-			length, err := item.FileData.GetLength()
+			defer item.Close()
+			length, err := item.GetLength()
 			if err != nil {
 				panic(err)
 			}
-			fmt.Println("🦆 id:", item.FileID, "name:", item.FileData.GetFileName(),
+			fmt.Println("🦆 id:", item.FileID, "name:", item.GetFileName(),
 				"length:", length, "bytes,", length/1024, "kb,",
 				length/(1024*1024), "mb,", length/(1024*1024*1024), "gb.")
 
@@ -164,13 +164,19 @@ func main() {
 	fmt.Println("exec time:", time.Since(start))
 }
 
+var _ io.ReadCloser = (*MyStruct)(nil)
+
 type MyStruct struct {
-	FileID   int
-	FileData go_ora.BFile
+	FileID int
+	go_ora.BFile
 }
 
-func (s *MyStruct) CopyDataToFile(dst *os.File) error {
-	src, err := os.Open(fmt.Sprintf("tmp/%s", s.FileData.GetFileName()))
+func (m *MyStruct) Read(p []byte) (n int, err error) {
+	return m.Read(p)
+}
+
+func (m *MyStruct) CopyDataToFile(dst *os.File) error {
+	src, err := os.Open(fmt.Sprintf("tmp/%s", m.GetFileName()))
 	if err != nil {
 		return err
 	}
